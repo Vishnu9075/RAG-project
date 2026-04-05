@@ -1,11 +1,15 @@
-import React from 'react'
+import { auth } from '@clerk/nextjs/server';
+import { redirect } from 'next/navigation';
 
-const HomePage = () => {
-  return (
-    <div>
-      Welcome page
-    </div>
-  )
+async function HomePage() {
+
+  const { userId } = await auth();
+
+  if (userId) {
+    redirect("/projects");
+  } else {
+    redirect("/sign-in");
+  }
 }
 
 export default HomePage
