@@ -4,11 +4,11 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs'; 
 import { useRouter } from 'next/navigation';
 
-import { ProjectsGrid } from '@/src/components/projects/ProjectsGrid';
-import { CreateProjectModal } from '@/src/components/projects/CreateProjectModal';
-import { LoadingSpinner } from '@/src/components/ui/LoadingSpinner';
+import { ProjectsGrid } from '@/components/projects/ProjectsGrid';
+import { CreateProjectModal } from '@/components/projects/CreateProjectModal';
+import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import toast from "react-hot-toast";
-import { apiClient } from '@/src/lib/api';
+import { apiClient } from '@/lib/api';
 
 interface Project {
   id : string;
