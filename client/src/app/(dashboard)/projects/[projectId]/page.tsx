@@ -7,14 +7,24 @@ import { FileDetailsModal } from '@/components/projects/FileDetailsModal';
 import { useAuth } from '@clerk/nextjs';
 import { Settings } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import { Project, Chat, ProjectDocument, ProjectSettings } from '@/lib/types';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { NotFound } from '@/components/ui/NotFound';
+import { title } from 'process';
+import toast from 'react-hot-toast';
 
 
 interface ProjectPageProps{
     params: Promise<{
         projectId: string;
     }>;
+}
+
+interface ProjectData {
+    project: Project | null;
+    chats: Chat[];
+    documents: ProjectDocument[];
+    settings: ProjectSettings | null;
 }
 
 
@@ -24,15 +34,18 @@ function ProjectPage({params}: ProjectPageProps) {
     const {getToken, userId} = useAuth();
 
     //data state
-    const [data, setData] = useState({
-        project : null,
-        chats : [],
-        documents : [],
-        settings : null
+    const [data, setData] = useState<ProjectData>({
+        project: null,
+        chats: [],
+        documents: [],
+        settings: null,
     });
     
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const [error, setError] = useState<string | null>(null);
+
+
+    const [isCreatingChat, setIsCreatingChat] = useState(false);
 
     const [activeTab, setActiveTab] = useState<"documents" | "settings">("documents");
 
@@ -66,7 +79,8 @@ function ProjectPage({params}: ProjectPageProps) {
                     settings: settingsRes.data,
                 });
             } catch (err) {
-
+                setError("failed to fetch data");
+                toast.error("failed to fetch data");
             } finally {
                 setLoading(false);
             }
@@ -78,11 +92,56 @@ function ProjectPage({params}: ProjectPageProps) {
   //chat related methods
 
   const handleCreateNewchat = async () => {
-    console.log("create new chat")
+    if (!userId) return 
+
+    try {
+        setIsCreatingChat(true);
+
+        const token = await getToken()
+
+        const chatNumber = Date.now() % 10000;
+
+        const result = await apiClient.post("/api/chats", {
+            title : `chat #${chatNumber}`,
+            project_id: projectId
+        }, token)
+
+        const savedChat = result.data
+
+        // update local state
+
+        setData((prev) => ({
+            ...prev,
+            chats:[savedChat, ...prev.chats]
+        }));
+
+        toast.success("chat create successfully")
+    } catch (err){
+        toast.error("failed to create chat");
+    } finally {
+        setIsCreatingChat(false);
+    }
   };
 
   const handleDeleteChat = async (chatId: string) => {
-    console.log("chat deleted");
+    if (!userId) return
+
+    try {
+        const token = await getToken()
+
+        await apiClient.delete(`/api/chats/${chatId}`, token)
+
+        // update local state
+
+        setData((prev) => ({
+            ...prev,
+            chats: prev.chats.filter((chat) => chat.id !== chatId)
+        }));
+
+        toast.success("chat delete successfully")
+    } catch (err) {
+        toast.error("Failed to delete chat")
+    }
   };
 
   const handleChatClick = (chatId: string) => {
@@ -126,7 +185,9 @@ function ProjectPage({params}: ProjectPageProps) {
     return <NotFound message='Project not found' />
   }
 
-  const selectedDocument = selectedDocumentId ? data.documents.find(doc => doc.id == selectedDocumentId) : null
+  const selectedDocument = selectedDocumentId
+    ? data.documents.find((doc) => doc.id == selectedDocumentId)
+    : null;
 
   return (
     <>
@@ -135,11 +196,11 @@ function ProjectPage({params}: ProjectPageProps) {
             <ConversationsList
                 project= {data.project}
                 conversations={data.chats}
-                error={null}
-                loading={false}
+                error={error}
+                loading={isCreatingChat}
                 onCreateNewChat={handleCreateNewchat}
                 onChatClick={handleChatClick}
-                onDeleteChat={handleChatClick}
+                onDeleteChat={handleDeleteChat}
             />
             
             <KnowledgeBaseSidebar
