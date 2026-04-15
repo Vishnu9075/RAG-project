@@ -224,3 +224,32 @@ async def get_project_settings(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail= f"Failed to get project settings: {str(e)}")
+    
+
+@router.put("/api/projects/{project_id}/settings")
+async def update_project_settings(
+    project_id: str,
+    settings: ProjectSettings,
+    clerk_id: str = Depends(get_current_user)
+):
+    try:
+        # first verify the project exists and belong to the user
+        project_result = supabase.table("projects").select("id").eq("id", project_id).eq("clerk_id", clerk_id).execute()
+
+        if not project_result.data:
+            raise HTTPException(status_code=404, detail=f"project not found or access denied")
+        
+        result = supabase.table("project_settings").update(settings.model_dump()).eq("project_id", project_id).execute()
+
+        if not result.data:
+           raise HTTPException(status_code=404, detail=f"project settings not found")
+        
+        return {
+            "message": "Project settings updated successfully",
+            "data": result.data[0]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail= f"failed to update project settings: {str(e)}")
+    
+
+    

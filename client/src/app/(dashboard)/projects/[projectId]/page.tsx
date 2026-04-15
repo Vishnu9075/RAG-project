@@ -170,11 +170,45 @@ function ProjectPage({params}: ProjectPageProps) {
   // project settings related methods
 
   const handleDraftSettings = (updates: any) =>{
-    console.log("update local state with draft settings", updates);
+
+    setData((prev) => {
+        // if no settings exist yet , we cant update them
+        if (!prev.settings) {
+            console.warn("Cannot update settings: not loaded yet")
+            return prev
+        }
+
+        // merge the updates into existing settings
+
+        return {
+            ...prev,
+            settings: {
+                ...prev.settings,
+                ...updates,
+            }
+        }
+    })
   };
 
   const handlePublishSettings = async ()=> {
-    console.log("make API call to update settings");
+    if (!userId || !data.settings) {
+        toast.error("cannot save settings")
+    }
+
+    try {
+        const token = await getToken()
+
+        const result = await apiClient.put(`/api/projects/${projectId}/settings`, data.settings, token)
+
+        setData((prev) => ({
+            ...prev,
+            settings: result.data
+        }))
+
+        toast.success("settings saved successfully")
+    } catch (err) {
+        toast.error("failed to save settings")
+    }
   };
 
   if (loading) {
