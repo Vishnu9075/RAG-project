@@ -25,3 +25,6 @@ s3_client = boto3.client(
     )
 
 BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
+
+if not BUCKET_NAME:
+    raise ValueError("Missing S3_BUCKET_NAME in env variables")

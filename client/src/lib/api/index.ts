@@ -1,3 +1,5 @@
+import { error } from "console";
+
 //API configuration
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
@@ -89,4 +91,16 @@ export const apiClient = {
 
     return response.json();
   },
+
+  uploadToS3: async (url: string, file: File) => {
+    const response = await fetch(url, {
+      method: "PUT",
+      body: file,
+      headers : { "Content-Type": file.type},
+    });
+    if (!response.ok) {
+      throw new Error(`S# upload Error: ${response.status}`);
+    }
+    return response; // s3 dosent return json
+  }
 };

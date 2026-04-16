@@ -151,15 +151,116 @@ function ProjectPage({params}: ProjectPageProps) {
   // document releated methods
 
   const handleDocumentUpload = async (files: File[]) => {
-    console.log("upload files", files);
+    if (!userId) return;
+
+    const token = await getToken();
+    const uploadedDocuments : ProjectDocument[] = [];
+
+    // process all files in parallel
+
+    const uploadPromises = files.map(async (file) => {
+        try {
+
+            // step 1 get presigned url
+            const uploadData = await apiClient.post(
+                `/api/projects/${projectId}/files/upload_url`,
+                {
+                    filename: file.name,
+                    file_size: file.size,
+                    file_type: file.type
+                },
+                token
+            );
+
+            const { upload_url, s3_key } = uploadData.data;
+
+            //step 2 upload file to s3
+            await apiClient.uploadToS3(upload_url, file)
+
+            // step 3 confirm the upload to server (starts background processing)
+            
+            const updatedDocument = await apiClient.post(
+                `/api/projects/${projectId}/files/confirm`,
+                {
+                    s3_key,
+                },
+                token,
+            );
+
+            uploadedDocuments.push(updatedDocument.data);
+
+        } catch (err) {
+            toast.error(`failed to upload ${file.name}`);
+        }
+    })
+
+    await Promise.allSettled(uploadPromises);
+
+    //upload local state with successfully uploaded document
+
+    if (uploadedDocuments.length > 0) {
+        setData((prev) => ({
+            ...prev,
+            documents: [...uploadedDocuments, ...prev.documents],
+        }));
+
+        toast.success(`${uploadedDocuments.length} file(s) uploaded`);
+    }
   };
 
   const handleDocumentDelete = async (documentId: string) => {
-    console.log("Document Deleted");
+    if (!userId) return;
+
+    try {
+        const token = await getToken()
+
+        await apiClient.delete(
+            `/api/projects/${projectId}/files/${documentId}`, token
+        );
+
+        // update local state
+
+        setData((prev) => ({
+            ...prev,
+            documents: prev.documents.filter((doc) => doc.id !== documentId),
+        }));
+
+
+        toast.success("Document deleted successfully")
+    } catch (err) {
+        toast.error("Docuemnt deletion failed");
+    }
   };
 
   const handleUrlAdd = async (url: string) =>{
-    console.log("Add URl:", url);
+
+    if (!userId) return;
+
+    try {
+        const token = await getToken();
+
+        const result = await apiClient.post(
+            `/api/projects/${projectId}/urls`,
+            {
+                url,
+            },
+            token,
+        );
+
+        const newDocument = result.data;
+
+        //update local state
+        setData((prev) => ({
+            ...prev,
+            documents: [newDocument, ...prev.documents]
+        }));
+
+        toast.success("website added successfully")
+
+        console.log(result);
+    } catch (err) {
+        toast.error("failed to add website")
+    }
   };
 
   const handleOpenDocument = (documentId: string) => {
@@ -242,7 +343,7 @@ function ProjectPage({params}: ProjectPageProps) {
                 onSetActiveTab = {setActiveTab}
                 projectDocuments = {data.documents}
                 onDocumentUpload = {handleDocumentUpload}
-                onDocumentDelete = {handleDeleteChat}
+                onDocumentDelete = {handleDocumentDelete}
                 onOpenDocument = {handleOpenDocument}
                 onUrlAdd = {handleUrlAdd}
                 projectSettings = {data.settings}

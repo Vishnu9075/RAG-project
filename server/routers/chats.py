@@ -29,10 +29,10 @@ async def create_chat(
             "message": "chat created successfully",
             "data": result.data[0]
         }
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"failed to create chat: {str(e)}")
-    
+
 
 @router.delete("/api/chats/{chat_id}")
 async def delete_chat(
@@ -44,7 +44,7 @@ async def delete_chat(
 
         if not deleted_result.data:
             raise HTTPException(status_code=404, detail="chat not found or access denied")
-        
+
         return {
             "message": "chat Deleted Successfully",
             "data": deleted_result.data[0]
