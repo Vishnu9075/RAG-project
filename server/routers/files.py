@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from database import supabase, s3_client, BUCKET_NAME
 from auth import get_current_user
 import uuid
+from tasks import process_document
 
 router = APIRouter(
     tags=["projects"]
@@ -116,11 +117,20 @@ async def confirm_file_upload(
             "project_id", project_id).eq("clerk_id", clerk_id).execute()
 
         document = result.data[0]
+        document_id = document['id']
 
         if not result.data:
             raise HTTPException(status_code=404, detail="Document not found or access denied")
 
         # start background preprocessing of the current file with celery
+
+        task = process_document.delay(document_id)
+
+        #store the task id so that we can track it later if needed
+
+        supabase.table("project_documents").update({
+            "task_id":task.id
+        }).eq("id", document_id).execute()
 
 
         #return JSON
@@ -166,8 +176,18 @@ async def add_website_url(
         if not result.data:
             raise HTTPException(status_code=500, detail="Failed to create URL record")
 
-        #start backgrounf processing
+        document = result.data[0]
+        document_id = document['id']
 
+        # start background preprocessing of the current file with celery
+
+        task = process_document.delay(document_id)
+
+        #store the task id so that we can track it later if needed
+
+        supabase.table("project_documents").update({
+            "task_id":task.id
+        }).eq("id", document_id).execute()
 
 
         return {

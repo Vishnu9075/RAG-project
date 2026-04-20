@@ -88,6 +88,36 @@ function ProjectPage({params}: ProjectPageProps) {
         loadAllData();
     }, [userId, projectId]);
 
+    useEffect(() => {
+        const hasProcessingDocuments = data.documents.some(
+            (doc) =>
+                doc.processing_status &&
+                !["completed", "failed"].includes(doc.processing_status)
+        );
+
+        if (!hasProcessingDocuments) {
+            return;
+        }
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const token = await getToken()
+                const documentsRes = await apiClient.get(
+                    `/api/projects/${projectId}/files`, token
+                );
+
+                setData((prev) => ({
+                    ...prev,
+                    documents: documentsRes.data,
+                }));
+            } catch (err) {
+                console.error("polling error: ", err);
+            }
+        }, 2000);
+
+        return () => clearInterval(pollInterval);
+    }, [data.documents, projectId, getToken]);
+
 
   //chat related methods
 
