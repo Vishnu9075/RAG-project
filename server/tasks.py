@@ -1,5 +1,5 @@
 from celery import Celery
-from database import supabase, s3_client, BUCKET_NAME
+from database import BUCKET_NAME, s3_client, supabase
 import time
 from unstructured.partition.pdf import partition_pdf
 from unstructured.partition.docx import partition_docx
@@ -8,109 +8,126 @@ from unstructured.chunking.title import chunk_by_title
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage
 import os
-import tempfile
+from scrapingbee import ScrapingBeeClient
 
+# initialize scraping bee client
+scrapingbee_client = ScrapingBeeClient(api_key=os.getenv('SCRAPINGBEE_API_KEY'))
 
-llm = ChatOpenAI(model ="gpt-4-turbo", temperature=0)
+# Initialize LLM for summarization
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
 
+# Initialize embeddings model
+embeddings_model = OpenAIEmbeddings(
+    model="text-embedding-3-large",
+    dimensions=1536
+)
 
-Celery_app = Celery(
+# Create Celery app
+celery_app = Celery(
     'document_processor', #Name of our Celery app
-    broker="redis://localhost:6379/0", # where tasks are queued
-    backend="redis://localhost:6379/0" # where results are stored
-    )
+    broker="redis://localhost:6379/0", # Where tasks are queued
+    backend="redis://localhost:6379/0" # Where results are stored 
+)
 
 
 def update_status(document_id: str, status: str, details: dict = None):
-    """" Update document processing status with optional details """
+    """ Update document processing status with optional details """
 
-    #Get current details
-    result= supabase.table("project_documents").select("processing_details").eq("id", document_id).execute()
+    # Get current document 
+    result = supabase.table("project_documents").select("processing_details").eq("id", document_id).execute()
 
-    #start with existing detail or empty dict
+    # Start with existing details or empty dict
     current_details = {}
 
     if result.data and result.data[0]["processing_details"]:
         current_details = result.data[0]["processing_details"]
 
-    #add new details if provided
-    if details:
+    
+    # Add new details if provided
+    if details: 
         current_details.update(details)
+    
 
-
-    #update document
+    # Update document 
     supabase.table("project_documents").update({
-        "processing_status": status,
+        "processing_status": status, 
         "processing_details": current_details
     }).eq("id", document_id).execute()
 
-
-
-@Celery_app.task
-def process_document(document_id : str):
+@celery_app.task
+def process_document(document_id: str):
     """
-    Real document processing 
-    
+        Real document Processing
     """
-    try:
+
+    try: 
 
         doc_result = supabase.table("project_documents").select("*").eq("id", document_id).execute()
         document = doc_result.data[0]
         source_type = document.get('source_type', 'file')
 
-        # step 1 download and partition
-
+        # step 1: Download and partition 
         update_status(document_id, "partitioning")
-
         elements = download_and_partition(document_id, document)
 
-        # step 2 chunk elements
+
+        # step 2: Chunk elements 
         chunks, chunking_metrics = chunk_elements_by_title(elements)
         update_status(document_id, "summarising", {
-            "chunking": chunking_metrics
-        })
+            "chunking": chunking_metrics 
+        }) 
 
-        #step 3 summarising chunks
-
+        #3 Step 3: Summarising chunks 
         processed_chunks = summarise_chunks(chunks, document_id, source_type)
 
-        #step 4 vectorizing & storing
-
+        #4 Step 4: Vectorization & storing 
         update_status(document_id, 'vectorization')
         stored_chunk_ids = store_chunks_with_embeddings(document_id, processed_chunks)
 
+        # Mark as completed
+        update_status(document_id, 'completed')
+        print(f"✅ Celery task completed for document: {document_id} with {len(stored_chunk_ids)} chunks")
+    
+
         return {
-            "status" : "success",
+            "status": "success", 
             "document_id": document_id
         }
-    except Exception as e:
-        print(f"ERROR: {e}")
 
-
-
+    except Exception as e: 
+        pass
+   
 
 def download_and_partition(document_id: str, document: dict):
-    """  Download document form s3 / crawl URl and partion into elements """
-
+    """ Download document from S3 / Crawl URL and partition into elements  """
+    
     print(f"Downloading and partitioning document {document_id}")
 
     source_type = document.get("source_type", "file")
 
     if source_type == "url":
-        # crawl URL
-        pass
+        # Crawl URL 
+        url = document["source_url"]
+
+        #fetch content with scrapingbee
+        response = scrapingbee_client.get(url)
+
+        # save to temp file
+        temp_file = f"/tmp/{document_id}.html"
+        with open(temp_file, 'wb') as f:
+            f.write(response.content)
+
+        elements = partition_document(temp_file, "html", source_type="url")
 
     else:
-
         # Handle file processing
-
+        
         s3_key = document["s3_key"]
         filename = document["filename"]
         file_type = filename.split(".")[-1].lower()
 
-        #Download to a temporary loaction
-
-        temp_file = os.path.join(tempfile.gettempdir(), f"{document_id}.{file_type}")
+        #  Download to a temporary location 
+        temp_file = f"/tmp/{document_id}.{file_type}"
         s3_client.download_file(BUCKET_NAME, s3_key, temp_file)
 
         elements = partition_document(temp_file, file_type, source_type="file")
@@ -123,31 +140,33 @@ def download_and_partition(document_id: str, document: dict):
             "elements_found": elements_summary
         }
     })
-
     os.remove(temp_file)
 
     return elements
 
 
-def partition_document(temp_file : str, file_type : str, source_type : str = "file"):
+
+def partition_document(temp_file: str, file_type: str, source_type: str = "file"):
     """ Partition document based on file type and source type """
 
-    if source_type == "url":
-        pass
+    if source_type == "url": 
+        return partition_html(
+            filename=temp_file
+        )
 
     if file_type == "pdf":
-
         return partition_pdf(
-            filename = temp_file, # path to your PDF files
-            strategy = "hi_res", # use most accurate (but slower) processing method of extraction
-            infer_table_structure = True, # Keep tables as structured HTML, not jumbled text
-            extract_image_block_types = ["Image"], # grab the images found in PDF
-            extract_image_block_to_payload = True  # Store the images as base64 data you can actually use
+            filename=temp_file,  # Path to your PDF file
+            strategy="hi_res", # Use the most accurate (but slower) processing method of extraction
+            infer_table_structure=True, # Keep tables as structured HTML, not jumbled text
+            extract_image_block_types=["Image"], # Grab images found in the PDF
+            extract_image_block_to_payload=True # Store images as base64 data you can actually use
         )
 
 
+
 def analyze_elements(elements):
-    """" count different types of elements found in the document """
+    """ Count different types of elements found in the document """
 
     text_count = 0
     table_count = 0
@@ -155,12 +174,13 @@ def analyze_elements(elements):
     title_count = 0
     other_count = 0
 
-    for element in elements:
-        element_name = type(element).__name__
+    # Go through each element and count what type it is 
+    for element in elements: 
+        element_name = type(element).__name__ #Get the class name like "Table" or "NarrativeText"
 
         if element_name == "Table":
             table_count += 1
-        elif element_name == "Image":
+        elif element_name == "Image": 
             image_count += 1
         elif element_name in ["Title", "Header"]:
             title_count += 1
@@ -169,165 +189,161 @@ def analyze_elements(elements):
         else:
             other_count += 1
 
+    # Return a simple dictionary
     return {
         "text": text_count,
-        "tables":table_count,
-        "images":image_count,
-        "titles":title_count,
+        "tables": table_count,
+        "images": image_count,
+        "titles": title_count,
         "other": other_count
     }
 
 
 def chunk_elements_by_title(elements):
-    """ chunk elements using title-based strategy and collect metrics """
+    """ Chunk elements using title-based strategy and collect metrics """
 
-    print(" creating smart chunks ")
-
+    print("🔨 Creating smart chunks...")
+    
     chunks = chunk_by_title(
-        elements,  # the parsed pdf elemenst from previous step
-        max_characters = 3000, # hard limit - never exceed 3000  charaters per chunk
-        new_after_n_chars = 2400, # try to start a new chunk after 2400 characters
-        combine_text_under_n_chars = 500 # merge tiny chunks under 500 chars with neighbours
+        elements, # The parsed PDF elements from previous step
+        max_characters=3000, # Hard limit - never exceed 3000 characters per chunk
+        new_after_n_chars=2400, # Try to start a new chunk after 2400 characters
+        combine_text_under_n_chars=500 # Merge tiny chunks under 500 chars with neighbors
     )
 
+    # Collect chunking metrics 
     total_chunks = len(chunks)
 
     chunking_metrics = {
-        "total_chunks" : total_chunks
+        "total_chunks": total_chunks
     }
 
-    print( f"created {total_chunks} chunks from {len(elements)} elements")
+    print(f"✅ Created {total_chunks} chunks from {len(elements)} elements")
 
     return chunks, chunking_metrics
 
 
-def summarise_chunks(chunks, document_id, source_type= "file"):
-    """" transform chunks inot searchable content with AI summaries """
-    print ("Proecessing chunks with AI Summarisation...")
 
-    processed_chunks=[]
+def summarise_chunks(chunks, document_id, source_type="file"):
+    """Transform chunks into searchable content with AI summaries"""
+    print("🧠 Processing chunks with AI Summarisation...")
+    
+    processed_chunks = []
     total_chunks = len(chunks)
-
-    for i , chunk in enumerate(chunks):
+    
+    for i, chunk in enumerate(chunks):
         current_chunk = i + 1
-
-        #update progress directly
-
-        update_status(document_id, "summarising", {
+        
+        # Update progress directly
+        update_status(document_id, 'summarising', {
             "summarising": {
                 "current_chunk": current_chunk,
                 "total_chunks": total_chunks
             }
         })
+        
+        # Extract content from the chunk
+        content_data = separate_content_types(chunk, source_type)
 
-        #Extract content from the chunk
-        content_data = seperate_content_types(chunk, source_type)
-
-        #Debug prints
-
-        print(f"  types found: {content_data['types']}")
-        print(f"  tables: {len(content_data['tables'])}, Images: {len(content_data['images'])}")
-
+        # Debug prints
+        print(f"     Types found: {content_data['types']}")
+        print(f"     Tables: {len(content_data['tables'])}, Images: {len(content_data['images'])}")
+        
         # Decide if we need AI summarisation
         if content_data['tables'] or content_data['images']:
-            print(f"  Creating Ai summary for mixed content...")
-            enhanced_content = create_ai_summary(
-                content_data['text'],
-                content_data['tables'],
+            print(f"     Creating AI summary for mixed content...")
+            enhanced_content = create_ai_summary( 
+                content_data['text'], 
+                content_data['tables'], 
                 content_data['images']
             )
-
         else:
             enhanced_content = content_data['text']
-
-        # build the original_content structure
-
+        
+        # Build the original_content structure
         original_content = {'text': content_data['text']}
         if content_data['tables']:
             original_content['tables'] = content_data['tables']
         if content_data['images']:
             original_content['images'] = content_data['images']
-
-        # 
-
+        
+        # Create processed chunk with all data
         processed_chunk = {
-            'content' : enhanced_content,
-            'original_content' : original_content,
+            'content': enhanced_content,
+            'original_content': original_content, 
             'type': content_data['types'],
             'page_number': get_page_number(chunk, i),
-            'char_count' : len(enhanced_content)
+            'char_count': len(enhanced_content)
         }
-
+        
         processed_chunks.append(processed_chunk)
-
-    print(f"Processed {len(processed_chunks)} chunks")
+    
+    print(f"✅ Processed {len(processed_chunks)} chunks")
     return processed_chunks
 
 def get_page_number(chunk, chunk_index):
-    """ Get page number from chunk or use fallback """
-
-    if hasattr(chunk, 'metadate'):
+    """Get page number from chunk or use fallback"""
+    if hasattr(chunk, 'metadata'):
         page_number = getattr(chunk.metadata, 'page_number', None)
         if page_number is not None:
             return page_number
-        
+    
     # Fallback: use chunk index as page number
     return chunk_index + 1
 
 
-def seperate_content_types(chunk, source_type = 'file'):
-    """ Analyze what type of content are in a chunk """
-
+def separate_content_types(chunk, source_type="file"):
+    """Analyze what types of content are in a chunk"""
     is_url_source = source_type == 'url'
-
+    
     content_data = {
-        'text' : chunk.text,
-        'tables' : [],
-        'images' : [],
-        'types' : ['text']
+        'text': chunk.text,
+        'tables': [],
+        'images': [],
+        'types': ['text']
     }
-
-    #check for tables and images in original elements
-
+    
+    # Check for tables and images in original elements
     if hasattr(chunk, 'metadata') and hasattr(chunk.metadata, 'orig_elements'):
         for element in chunk.metadata.orig_elements:
             element_type = type(element).__name__
-
-            # handles tables
-
+            
+            # Handle tables
             if element_type == 'Table':
                 content_data['types'].append('table')
                 table_html = getattr(element.metadata, 'text_as_html', element.text)
                 content_data['tables'].append(table_html)
-
+            
+            # Handle images (skip for URL sources)
             elif element_type == 'Image' and not is_url_source:
-                if (hasattr(element, 'metadata') and
+                if (hasattr(element, 'metadata') and 
                     hasattr(element.metadata, 'image_base64') and 
                     element.metadata.image_base64 is not None):
                     content_data['types'].append('image')
                     content_data['images'].append(element.metadata.image_base64)
-
+    
     content_data['types'] = list(set(content_data['types']))
     return content_data
 
 
-def create_ai_summary(text, tables_html, image_base64):
-    """ Create AI-enhanced summary for mixed content """
-
+def create_ai_summary(text, tables_html, images_base64):
+    """Create AI-enhanced summary for mixed content"""
+    
     try:
-        # Build the text prompt with more efficient instruction
+        # Build the text prompt with more efficient instructions
         prompt_text = f"""Create a searchable index for this document content.
 
 CONTENT:
 {text}
 
 """
-        #Add tables if present
+        
+        # Add tables if present
         if tables_html:
             prompt_text += "TABLES:\n"
             for i, table in enumerate(tables_html):
-                prompt_text += f"Table {i+1}: \n{table}\n\n"
-
+                prompt_text += f"Table {i+1}:\n{table}\n\n"
+        
         # More concise but effective prompt
         prompt_text += """
 Generate a structured search index (aim for 250-400 words):
@@ -353,24 +369,67 @@ DATA RELATIONSHIPS (if tables present):
 Focus on terms users would actually search for. Be specific and comprehensive.
 
 SEARCH INDEX:"""
-
+        
         # Build message content starting with the text prompt
-        message_content = [{"types": "text", "text": prompt_text}]
-
-        #Add images to the message
-        for i, image_base64 in enumerate({image_base64}):
+        message_content = [{"type": "text", "text": prompt_text}]
+        
+        # Add images to the message
+        for i, image_base64 in enumerate(images_base64):
             message_content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg:base64, {image_base64}"}
+                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
             })
-
-            print(f" Image {i+1} include in summary request")
-
-        message = HumanMessage(content = message_content)
-
+            print(f"🖼️ Image {i+1} included in summary request")
+        
+        message = HumanMessage(content=message_content)
+        
         response = llm.invoke([message])
-
+        
         return response.content
+        
+    except Exception as e:
+        print(f" AI summary failed: {e}")
+
+
+def store_chunks_with_embeddings(document_id: str, processed_chunks: list):
+    """Generate embeddings and store chunks in one efficient operation"""
+    print("Generating embeddings and storing chunks...")
     
-    except Exception as e :
-        print(f" AI summary failed: {e} ")
+    if not processed_chunks:
+        print(" No chunks to process")
+        return []
+    
+    # Step 1: Generate embeddings for all chunks
+    print(f"Generating embeddings for {len(processed_chunks)} chunks...")
+    
+    # Extract content for embedding generation
+    texts = [chunk_data['content'] for chunk_data in processed_chunks]
+    
+    # Generate embeddings in batches to avoid API limits
+    batch_size = 10
+    all_embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i:i + batch_size]
+        batch_embeddings = embeddings_model.embed_documents(batch_texts)
+        all_embeddings.extend(batch_embeddings)
+        print(f" ✅ Generated embeddings for batch {i//batch_size + 1}/{(len(texts) + batch_size - 1)//batch_size}")
+    
+    # Step 2: Store chunks with embeddings
+    print("Storing chunks with embeddings in database...")
+    stored_chunk_ids = []
+    
+    for i, (chunk_data, embedding) in enumerate(zip(processed_chunks, all_embeddings)):
+        # Add document_id, chunk_index, and embedding
+        chunk_data_with_embedding = {
+            **chunk_data,
+            'document_id': document_id,
+            'chunk_index': i,
+            'embedding': embedding
+        }
+        
+        result = supabase.table('document_chunks').insert(chunk_data_with_embedding).execute()
+        stored_chunk_ids.append(result.data[0]['id'])
+    
+    print(f"Successfully stored {len(processed_chunks)} chunks with embeddings")
+    return stored_chunk_ids
