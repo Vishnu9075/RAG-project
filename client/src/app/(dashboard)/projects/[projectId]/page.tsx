@@ -1,6 +1,7 @@
 "use client";
 
 import React, {use, useEffect, useState} from 'react';
+import { useRouter } from 'next/navigation';
 import { ConversationsList } from '@/components/projects/ConversationsList';
 import { KnowledgeBaseSidebar } from '@/components/projects/KnowledgeBaseSidebar';
 import { FileDetailsModal } from '@/components/projects/FileDetailsModal';
@@ -32,6 +33,7 @@ function ProjectPage({params}: ProjectPageProps) {
 
     const {projectId} = use(params);
     const {getToken, userId} = useAuth();
+    const router = useRouter();
 
     //data state
     const [data, setData] = useState<ProjectData>({
@@ -175,7 +177,7 @@ function ProjectPage({params}: ProjectPageProps) {
   };
 
   const handleChatClick = (chatId: string) => {
-    console.log("navigate to chat: ", chatId);
+    router.push(`/projects/${projectId}/chats/${chatId}`);
   };
 
   // document releated methods
